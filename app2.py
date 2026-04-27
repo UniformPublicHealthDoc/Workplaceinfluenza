@@ -5,7 +5,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 # ---------------- PARAMETERS ----------------
-POPULATION = 400
+POPULATION = st.slider("Population size", 100, 2000, 400, 50)
 SIM_DAYS = 60
 
 BASELINE_IMMUNITY = 0.13
