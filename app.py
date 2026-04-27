@@ -19,7 +19,7 @@ IA_MEAN, IA_SD = 4, 1.5
 
 BETA_COMMUNITY = 0.03  # fixed after calibration
 
-ABS_THRESHOLD = int(0.25 * POPULATION)
+ABS_THRESHOLD = int(0.10 * POPULATION)
 
 
 # ---------------- HELPERS ----------------
@@ -175,10 +175,10 @@ st.pyplot(fig2)
 
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
-ax3.axhline(ABS_THRESHOLD, color="red", linestyle="--", label="25% threshold")
+ax3.axhline(ABS_THRESHOLD, color="red", linestyle="--", label="10% threshold")
 ax3.set_title("Absenteeism Threshold")
 ax3.legend()
 st.pyplot(fig3)
 
 st.write(f"Peak absenteeism: {max(abs_curve):.0f}")
-st.write(f"Days above 25% threshold: {sum(x > ABS_THRESHOLD for x in abs_curve)}")
+st.write(f"Days above 10% threshold: {sum(x > ABS_THRESHOLD for x in abs_curve)}")
