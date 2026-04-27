@@ -197,4 +197,4 @@ st.subheader("Workforce Impact")
 
 st.metric("Total workdays lost", int(workdays_lost))
 st.metric("Peak absenteeism", int(max(abs_curve)))
-st.metric("Days above 25% threshold", int(sum(x >= ABS_THRESHOLD for x in abs_curve)))
+st.metric("Days above 10% threshold", int(sum(x >= ABS_THRESHOLD for x in abs_curve)))
