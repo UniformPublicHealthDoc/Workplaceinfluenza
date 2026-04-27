@@ -20,7 +20,7 @@ IA_MEAN, IA_SD = 4, 1.5
 BETA_WORKPLACE = 0.18   # calibrated ~ influenza R0 range
 BETA_COMMUNITY = 0.03
 
-ABS_THRESHOLD = int(0.25 * POPULATION)
+ABS_THRESHOLD = int(0.10 * POPULATION)
 
 
 # ---------------- HELPERS ----------------
@@ -184,11 +184,11 @@ ax2.plot(days, rt, color="purple")
 ax2.axhline(1, linestyle="--")
 st.pyplot(fig2)
 
-st.subheader("Absenteeism threshold (25%)")
+st.subheader("Absenteeism threshold (10%)")
 
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
-ax3.axhline(ABS_THRESHOLD, color="red", linestyle="--", label="25% threshold")
+ax3.axhline(ABS_THRESHOLD, color="red", linestyle="--", label="10% threshold")
 ax3.legend()
 st.pyplot(fig3)
 
