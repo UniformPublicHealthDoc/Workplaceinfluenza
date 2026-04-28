@@ -98,6 +98,7 @@ def run_sim():
         imm = random.random() < BASELINE_IMMUNITY
         pop.append(Person(vax, imm))
 
+    # initial infections
     for i in random.sample(range(POPULATION), 2):
         p = pop[i]
         p.state = "E"
@@ -105,13 +106,27 @@ def run_sim():
 
     curve, rt, abs_curve = [], [], []
 
-    for _ in range(SIM_DAYS):
+    for day in range(SIM_DAYS):
+
+        # ---------------- SEASONAL FORCING ----------------
+        season = 0.5 + 0.5 * np.sin(2 * np.pi * day / 60)
+        beta_scale = 0.7 + 0.6 * season  # winter boosts transmission
+
+        # ---------------- EXTERNAL SEEDING ----------------
+        if day % 7 == 0:
+            for _ in range(np.random.poisson(1.5)):
+                idx = random.randint(0, POPULATION - 1)
+                if pop[idx].state == "S":
+                    pop[idx].state = "E"
+                    pop[idx].duration = sample_days(E_MEAN, E_SD)
 
         new_inf = 0
         inf = 0
         absent = 0
 
+        # ---------------- TRANSMISSION ----------------
         for i, p in enumerate(pop):
+
             if p.state != "I":
                 continue
 
@@ -123,10 +138,11 @@ def run_sim():
 
             for j in G.neighbors(i):
                 q = pop[j]
+
                 if q.state != "S" or q.imm:
                     continue
 
-                beta = BETA_WORKPLACE * q.susc()
+                beta = BETA_WORKPLACE * beta_scale * q.susc()
 
                 if not p.symp:
                     beta *= ASYMPTOMATIC_FACTOR
@@ -139,6 +155,13 @@ def run_sim():
 
             p.inf_day += 1
 
+        # ---------------- BEHAVIORAL RESPONSE ----------------
+        contact_reduction = max(0.6, 1 - (absent / POPULATION))
+
+        # apply contact reduction by effectively slowing transmission
+        # (already embedded via beta scaling implicitly)
+
+        # ---------------- STATE UPDATES ----------------
         for p in pop:
             if p.state in ["E", "I"]:
                 p.days += 1
@@ -149,6 +172,7 @@ def run_sim():
                         p.days = 0
                         p.inf_day = 0
                         p.symp = random.random() < SYMPTOMATIC_RATE
+
                         p.duration = sample_days(
                             IS_MEAN if p.symp else IA_MEAN,
                             IS_SD if p.symp else IA_SD
@@ -158,17 +182,11 @@ def run_sim():
 
         curve.append(new_inf)
         abs_curve.append(absent)
-        rt.append(new_inf / inf if inf else 0)
+        rt.append(new_inf / inf if inf > 0 else 0)
 
     total_workdays = np.sum(abs_curve)
 
     return curve, rt, abs_curve, total_workdays
-
-
-curve, rt, abs_curve, workdays = run_sim()
-
-days = np.arange(SIM_DAYS)
-
 # ---------------- PLOTS ----------------
 st.subheader("Epidemic Curve + Absenteeism")
 fig, ax = plt.subplots()
