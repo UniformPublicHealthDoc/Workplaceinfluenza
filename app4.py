@@ -6,30 +6,51 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # ---------------- UI ----------------
-st.title("Workplace Influenza Model (Two-Layer FOI)")
+st.title("R₀-Calibrated Workplace Influenza Model (Two-Layer FOI)")
 
 POPULATION = st.slider("Population size", 100, 2000, 400, 50)
 VE = st.slider("Vaccine Effectiveness", 0.0, 0.9, 0.4, 0.05)
 UPTAKE = st.slider("Vaccine Uptake", 0.0, 1.0, 0.6, 0.05)
-CONTACTS = st.slider("Workplace size", 4, 20, 10, 1)
+CONTACTS = st.slider("Workplace size (avg)", 4, 20, 10, 1)
 
 SIM_DAYS = 90
 
 BASELINE_IMMUNITY = 0.13
 
 SYMPTOMATIC_RATE = 0.5
-ASYMPTOMATIC_FACTOR = 0.5
+ASYMPTOMATIC_FACTOR = 0.7
 
 E_MEAN, E_SD = 1.9, 1.23
 IS_MEAN, IS_SD = 4, 1.5
 IA_MEAN, IA_SD = 4, 1.5
 
 ABS_10 = int(0.10 * POPULATION)
+ABS_25 = int(0.25 * POPULATION)
+
+# ---------------- R0 TARGET ----------------
+R0_TARGET = 1.5
+INF_DURATION = 4.0
 
 
-# ---------------- TRANSMISSION PARAMETERS ----------------
-BETA_WORK = 0.18
-BETA_COMM = 0.015  # small but persistent external pressure
+# ---------------- CALIBRATION ----------------
+def estimate_contacts(pop_size, workplace_size):
+    # simple approximation of effective contacts/day
+    return workplace_size + 2.0
+
+
+def calibrate_beta(pop_size, workplace_size):
+
+    contacts = estimate_contacts(pop_size, workplace_size)
+
+    beta_total = R0_TARGET / (contacts * INF_DURATION)
+
+    beta_work = beta_total * 0.85
+    beta_comm = beta_total * 0.15
+
+    return beta_work, beta_comm
+
+
+BETA_WORK, BETA_COMM = calibrate_beta(POPULATION, CONTACTS)
 
 
 # ---------------- PERSON ----------------
@@ -70,7 +91,7 @@ def build_network():
     return G
 
 
-# ---------------- FORCE OF INFECTION ----------------
+# ---------------- SIMULATION ----------------
 def run_sim():
 
     G = build_network()
@@ -81,7 +102,7 @@ def run_sim():
         imm = random.random() < BASELINE_IMMUNITY
         pop.append(Person(vax, imm))
 
-    # initial infection
+    # initial infections
     for i in random.sample(range(POPULATION), 2):
         pop[i].state = "E"
         pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
@@ -98,7 +119,7 @@ def run_sim():
         infectious = 0
         absent = 0
 
-        # ---------------- WORKPLACE FORCE ----------------
+        # ---------------- TRANSMISSION ----------------
         for i, p in enumerate(pop):
 
             if p.state != "I":
@@ -116,13 +137,14 @@ def run_sim():
                 if q.state != "S" or q.imm:
                     continue
 
-                # workplace exposure
-                lambda_work = BETA_WORK * q.susc()
+                degree = max(len(list(G.neighbors(i))), 1)
+
+                lambda_work = (BETA_WORK / degree) * q.susc()
+                lambda_comm = BETA_COMM * q.susc()
 
                 if not p.symp:
                     lambda_work *= ASYMPTOMATIC_FACTOR
 
-                # total force of infection (work + community)
                 lambda_total = lambda_work + lambda_comm_base
 
                 if random.random() < 1 - np.exp(-lambda_total):
@@ -171,7 +193,7 @@ fig, ax = plt.subplots()
 ax.plot(days, curve)
 st.pyplot(fig)
 
-st.subheader("Rt")
+st.subheader("Rt Over Time")
 fig2, ax2 = plt.subplots()
 ax2.plot(days, rt)
 ax2.axhline(1, linestyle="--")
@@ -180,7 +202,9 @@ st.pyplot(fig2)
 st.subheader("Absenteeism")
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
-ax3.axhline(ABS_10, color="orange", linestyle="--")
+ax3.axhline(ABS_10, color="orange", linestyle="--", label="10% threshold")
+ax3.axhline(ABS_25, color="red", linestyle="--", label="25% threshold")
+ax3.legend()
 st.pyplot(fig3)
 
 # ---------------- METRICS ----------------
@@ -191,6 +215,7 @@ workdays = np.sum(abs_curve)
 st.metric("Total workdays lost", int(workdays))
 st.metric("Peak absenteeism", int(np.max(abs_curve)))
 st.metric("Days >10% absent", int(np.sum(abs_curve >= ABS_10)))
+st.metric("Days >25% absent", int(np.sum(abs_curve >= ABS_25)))
 
 # ---------------- EXPORT ----------------
 df = pd.DataFrame({
@@ -200,8 +225,23 @@ df = pd.DataFrame({
     "absenteeism": abs_curve
 })
 
+summary = pd.DataFrame([{
+    "population": POPULATION,
+    "VE": VE,
+    "uptake": UPTAKE,
+    "contacts": CONTACTS,
+    "R0_target": R0_TARGET,
+    "workdays_lost": workdays
+}])
+
 st.download_button(
-    "Download CSV",
+    "Download time series CSV",
     df.to_csv(index=False),
-    "flu_two_layer_model.csv"
+    "flu_timeseries.csv"
+)
+
+st.download_button(
+    "Download summary CSV",
+    summary.to_csv(index=False),
+    "flu_summary.csv"
 )
