@@ -104,22 +104,23 @@ def run_sim():
         imm = random.random() < BASELINE_IMMUNITY
         pop.append(Person(vax, imm))
 
-    # seed infection
+    # seed infections
     for i in random.sample(range(POPULATION), 3):
         pop[i].state = "E"
         pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
 
-    curve, rt, abs_curve = [], [], []
+    curve = []
+    rt = []
+    abs_curve = []
 
-    # --- FIXED transmission probability (key change) ---
-    base_beta = 0.06   # calibrated for influenza-like spread
-    comm_beta = 0.02
+    # --- SIMPLE STABLE PARAMETERS ---
+    p_work = 0.03        # per-contact infection probability
+    p_comm = 0.002       # daily external infection probability
 
     for day in range(SIM_DAYS):
 
-        # seasonal forcing (stronger than before)
         season = 0.6 + 0.4 * np.sin(2 * np.pi * day / 60)
-        lambda_comm = comm_beta * season
+        p_comm_day = p_comm * season
 
         new_inf = 0
         infectious = 0
@@ -137,8 +138,6 @@ def run_sim():
             infectious += 1
 
             neighbors = list(G.neighbors(i))
-            if not neighbors:
-                continue
 
             for j in neighbors:
                 q = pop[j]
@@ -146,27 +145,23 @@ def run_sim():
                 if q.state != "S" or q.imm:
                     continue
 
-                # per-contact transmission probability (IMPORTANT FIX)
-                p_trans = base_beta * q.susc()
-
-                if not p.symp:
-                    p_trans *= 0.6
-
-                # community background risk
-                if random.random() < lambda_comm:
+                # WORKPLACE TRANSMISSION (SIMPLE + STABLE)
+                if random.random() < p_work * q.susc():
                     q.state = "E"
                     q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
                     new_inf += 1
-                    continue
 
-                if random.random() < p_trans:
-                    q.state = "E"
-                    q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+            # COMMUNITY INFECTION (IMPORTANT FOR SUSTAINED WAVES)
+            if random.random() < p_comm_day:
+                idx = random.randint(0, POPULATION - 1)
+                if pop[idx].state == "S":
+                    pop[idx].state = "E"
+                    pop[idx].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
                     new_inf += 1
 
             p.inf_day += 1
 
-        # state transitions
+        # STATE UPDATES
         for p in pop:
             if p.state in ["E", "I"]:
                 p.days += 1
@@ -177,7 +172,6 @@ def run_sim():
                         p.days = 0
                         p.inf_day = 0
                         p.symp = random.random() < SYMPTOMATIC_RATE
-
                         p.duration = max(1, int(np.random.normal(
                             IS_MEAN if p.symp else IA_MEAN,
                             IS_SD if p.symp else IA_SD
@@ -187,8 +181,7 @@ def run_sim():
 
         curve.append(new_inf)
         abs_curve.append(absent)
-
-        rt.append(new_inf / infectious if infectious > 0 else 0)
+        rt.append(new_inf / max(infectious, 1))
 
     return np.array(curve), np.array(rt), np.array(abs_curve)
 
