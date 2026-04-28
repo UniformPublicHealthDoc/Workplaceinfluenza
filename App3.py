@@ -24,7 +24,6 @@ IS_MEAN, IS_SD = 4, 1.5
 IA_MEAN, IA_SD = 4, 1.5
 
 ABS_10 = int(0.10 * POPULATION)
-ABS_25 = int(0.25 * POPULATION)
 
 
 # ---------------- R0 CALIBRATION ----------------
@@ -188,7 +187,6 @@ st.subheader("Absenteeism Thresholds")
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
 ax3.axhline(ABS_10, color="orange", linestyle="--", label="10% threshold")
-ax3.axhline(ABS_25, color="red", linestyle="--", label="25% threshold")
 ax3.legend()
 st.pyplot(fig3)
 
@@ -197,12 +195,10 @@ st.subheader("Workforce Impact")
 
 peak_abs = int(max(abs_curve))
 days_10 = int(sum(x >= ABS_10 for x in abs_curve))
-days_25 = int(sum(x >= ABS_25 for x in abs_curve))
 
 st.metric("Total workdays lost", int(workdays))
 st.metric("Peak absenteeism", peak_abs)
 st.metric("Days >10% absent", days_10)
-st.metric("Days >25% absent", days_25)
 
 # ---------------- EXPORT REPORT ----------------
 report = pd.DataFrame({
