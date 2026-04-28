@@ -104,24 +104,27 @@ def run_sim():
         imm = random.random() < BASELINE_IMMUNITY
         pop.append(Person(vax, imm))
 
-    # seed infections
-    for i in random.sample(range(POPULATION), 2):
+    # seed infection
+    for i in random.sample(range(POPULATION), 3):
         pop[i].state = "E"
         pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
 
     curve, rt, abs_curve = [], [], []
 
+    # --- FIXED transmission probability (key change) ---
+    base_beta = 0.06   # calibrated for influenza-like spread
+    comm_beta = 0.02
+
     for day in range(SIM_DAYS):
 
-        # ---------------- SEASONAL COMMUNITY FORCE ----------------
-        season = 0.5 + 0.5 * np.sin(2 * np.pi * day / 60)
-        lambda_comm = BETA_COMM * (0.5 + season)
+        # seasonal forcing (stronger than before)
+        season = 0.6 + 0.4 * np.sin(2 * np.pi * day / 60)
+        lambda_comm = comm_beta * season
 
         new_inf = 0
         infectious = 0
         absent = 0
 
-        # ---------------- TRANSMISSION ----------------
         for i, p in enumerate(pop):
 
             if p.state != "I":
@@ -133,29 +136,37 @@ def run_sim():
 
             infectious += 1
 
-            for j in G.neighbors(i):
+            neighbors = list(G.neighbors(i))
+            if not neighbors:
+                continue
+
+            for j in neighbors:
                 q = pop[j]
 
                 if q.state != "S" or q.imm:
                     continue
 
-                # WORKPLACE FORCE (NO DEGREE NORMALIZATION)
-                lambda_work = BETA_WORK * q.susc()
+                # per-contact transmission probability (IMPORTANT FIX)
+                p_trans = base_beta * q.susc()
 
                 if not p.symp:
-                    lambda_work *= ASYMPTOMATIC_FACTOR
+                    p_trans *= 0.6
 
-                lambda_total = lambda_work + lambda_comm
-
-                if random.random() < 1 - np.exp(-lambda_total):
+                # community background risk
+                if random.random() < lambda_comm:
                     q.state = "E"
-                    q.days = 0
+                    q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+                    new_inf += 1
+                    continue
+
+                if random.random() < p_trans:
+                    q.state = "E"
                     q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
                     new_inf += 1
 
             p.inf_day += 1
 
-        # ---------------- STATE TRANSITIONS ----------------
+        # state transitions
         for p in pop:
             if p.state in ["E", "I"]:
                 p.days += 1
@@ -180,7 +191,6 @@ def run_sim():
         rt.append(new_inf / infectious if infectious > 0 else 0)
 
     return np.array(curve), np.array(rt), np.array(abs_curve)
-
 
 # ---------------- RUN ----------------
 curve, rt, abs_curve = run_sim()
