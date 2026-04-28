@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # ---------------- UI ----------------
-st.title("R₀-Calibrated Workplace Influenza Model (Two-Layer FOI)")
+st.title("Workplace Influenza Model (Stable R₀-Calibrated FOI)")
 
 POPULATION = st.slider("Population size", 100, 2000, 400, 50)
 VE = st.slider("Vaccine Effectiveness", 0.0, 0.9, 0.4, 0.05)
 UPTAKE = st.slider("Vaccine Uptake", 0.0, 1.0, 0.6, 0.05)
-CONTACTS = st.slider("Workplace size (avg)", 4, 20, 10, 1)
+CONTACTS = st.slider("Workplace size", 4, 20, 10, 1)
 
 SIM_DAYS = 90
 
@@ -27,30 +27,32 @@ IA_MEAN, IA_SD = 4, 1.5
 ABS_10 = int(0.10 * POPULATION)
 ABS_25 = int(0.25 * POPULATION)
 
-# ---------------- R0 TARGET ----------------
+# ---------------- TARGET R0 ----------------
 R0_TARGET = 1.5
 INF_DURATION = 4.0
 
 
 # ---------------- CALIBRATION ----------------
-def estimate_contacts(pop_size, workplace_size):
-    # simple approximation of effective contacts/day
-    return workplace_size + 2.0
+def estimate_contacts(workplace_size):
+    # effective daily contacts in clustered workplace model
+    return workplace_size * 0.6 + 2.0
 
 
-def calibrate_beta(pop_size, workplace_size):
+def calibrate_beta(workplace_size):
 
-    contacts = estimate_contacts(pop_size, workplace_size)
+    contacts = estimate_contacts(workplace_size)
 
     beta_total = R0_TARGET / (contacts * INF_DURATION)
 
-    beta_work = beta_total * 0.85
-    beta_comm = beta_total * 0.15
+    # IMPORTANT:
+    # in FOI network models, we do NOT divide by degree later
+    beta_work = beta_total * 1.4
+    beta_comm = beta_total * 0.6
 
     return beta_work, beta_comm
 
 
-BETA_WORK, BETA_COMM = calibrate_beta(POPULATION, CONTACTS)
+BETA_WORK, BETA_COMM = calibrate_beta(CONTACTS)
 
 
 # ---------------- PERSON ----------------
@@ -102,7 +104,7 @@ def run_sim():
         imm = random.random() < BASELINE_IMMUNITY
         pop.append(Person(vax, imm))
 
-    # initial infections
+    # seed infections
     for i in random.sample(range(POPULATION), 2):
         pop[i].state = "E"
         pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
@@ -113,7 +115,7 @@ def run_sim():
 
         # ---------------- SEASONAL COMMUNITY FORCE ----------------
         season = 0.5 + 0.5 * np.sin(2 * np.pi * day / 60)
-        lambda_comm_base = BETA_COMM * (0.5 + season)
+        lambda_comm = BETA_COMM * (0.5 + season)
 
         new_inf = 0
         infectious = 0
@@ -137,15 +139,13 @@ def run_sim():
                 if q.state != "S" or q.imm:
                     continue
 
-                degree = max(len(list(G.neighbors(i))), 1)
-
-                lambda_work = (BETA_WORK / degree) * q.susc()
-                lambda_comm = BETA_COMM * q.susc()
+                # WORKPLACE FORCE (NO DEGREE NORMALIZATION)
+                lambda_work = BETA_WORK * q.susc()
 
                 if not p.symp:
                     lambda_work *= ASYMPTOMATIC_FACTOR
 
-                lambda_total = lambda_work + lambda_comm_base
+                lambda_total = lambda_work + lambda_comm
 
                 if random.random() < 1 - np.exp(-lambda_total):
                     q.state = "E"
@@ -227,10 +227,10 @@ df = pd.DataFrame({
 
 summary = pd.DataFrame([{
     "population": POPULATION,
+    "R0_target": R0_TARGET,
     "VE": VE,
     "uptake": UPTAKE,
     "contacts": CONTACTS,
-    "R0_target": R0_TARGET,
     "workdays_lost": workdays
 }])
 
