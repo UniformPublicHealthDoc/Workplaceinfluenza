@@ -216,7 +216,6 @@ summary = pd.DataFrame([{
     "total_workdays_lost": workdays,
     "peak_absenteeism": peak_abs,
     "days_above_10%": days_10,
-    "days_above_25%": days_25,
     "beta_workplace": BETA_WORKPLACE
 }])
 
