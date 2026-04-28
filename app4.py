@@ -6,62 +6,37 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # ---------------- UI ----------------
-st.title("Workplace Influenza Model (Stable R₀-Calibrated FOI)")
+st.title("Metapopulation Workplace Influenza Model")
 
-POPULATION = st.slider("Population size", 100, 2000, 400, 50)
-VE = st.slider("Vaccine Effectiveness", 0.0, 0.9, 0.4, 0.05)
-UPTAKE = st.slider("Vaccine Uptake", 0.0, 1.0, 0.6, 0.05)
-CONTACTS = st.slider("Workplace size", 4, 20, 10, 1)
+POPULATION = st.slider("Total population", 200, 3000, 800, 100)
+WORKPLACES = st.slider("Number of workplaces", 5, 50, 15, 1)
+VE = st.slider("Vaccine effectiveness", 0.0, 0.9, 0.4, 0.05)
+UPTAKE = st.slider("Vaccine uptake", 0.0, 1.0, 0.6, 0.05)
 
 SIM_DAYS = 90
 
 BASELINE_IMMUNITY = 0.13
-
 SYMPTOMATIC_RATE = 0.5
-ASYMPTOMATIC_FACTOR = 0.7
 
-E_MEAN, E_SD = 1.9, 1.23
-IS_MEAN, IS_SD = 4, 1.5
-IA_MEAN, IA_SD = 4, 1.5
+# ---------------- PARAMETERS ----------------
+p_work = 0.08       # within workplace transmission
+p_comm = 0.0012     # community infection risk
+p_between = 0.002   # cross-workplace mixing
 
-ABS_10 = int(0.10 * POPULATION)
-ABS_25 = int(0.25 * POPULATION)
-
-# ---------------- TARGET R0 ----------------
-R0_TARGET = 1.5
-INF_DURATION = 4.0
-
-
-# ---------------- CALIBRATION ----------------
-def estimate_contacts(workplace_size):
-    # effective daily contacts in clustered workplace model
-    return workplace_size * 0.6 + 2.0
-
-
-def calibrate_beta(workplace_size):
-
-    contacts = estimate_contacts(workplace_size)
-
-    beta_total = R0_TARGET / (contacts * INF_DURATION)
-
-    # IMPORTANT:
-    # in FOI network models, we do NOT divide by degree later
-    beta_work = beta_total * 1.4
-    beta_comm = beta_total * 0.6
-
-    return beta_work, beta_comm
-
-
-BETA_WORK, BETA_COMM = calibrate_beta(CONTACTS)
+E_MEAN, E_SD = 1.9, 1.2
+I_MEAN, I_SD = 4, 1.5
 
 
 # ---------------- PERSON ----------------
 class Person:
-    def __init__(self, vax, imm):
+    def __init__(self, workplace, vax, imm):
+        self.workplace = workplace
         self.vax = vax
         self.imm = imm
+
         self.state = "S"
         self.symp = False
+
         self.days = 0
         self.duration = 0
         self.inf_day = 0
@@ -70,61 +45,49 @@ class Person:
         return (1 - VE) if self.vax else 1.0
 
 
-# ---------------- NETWORK ----------------
-def build_network():
-    G = nx.Graph()
-    G.add_nodes_from(range(POPULATION))
+# ---------------- POPULATION STRUCTURE ----------------
+def build_population():
 
-    nodes = list(G.nodes)
-    random.shuffle(nodes)
+    pop = []
 
-    i = 0
-    while i < POPULATION:
-        size = max(2, int(np.random.poisson(CONTACTS)))
-        group = nodes[i:i+size]
+    workplaces = [[] for _ in range(WORKPLACES)]
 
-        for a in group:
-            for b in group:
-                if a != b:
-                    G.add_edge(a, b)
+    for i in range(POPULATION):
+        wp = i % WORKPLACES
 
-        i += size
+        vax = random.random() < UPTAKE
+        imm = random.random() < BASELINE_IMMUNITY
 
-    return G
+        p = Person(wp, vax, imm)
+        pop.append(p)
+        workplaces[wp].append(i)
+
+    return pop, workplaces
 
 
 # ---------------- SIMULATION ----------------
 def run_sim():
 
-    G = build_network()
-
-    pop = []
-    for _ in range(POPULATION):
-        vax = random.random() < UPTAKE
-        imm = random.random() < BASELINE_IMMUNITY
-        pop.append(Person(vax, imm))
+    pop, workplaces = build_population()
 
     # initial infections
-    for i in random.sample(range(POPULATION), 3):
+    for _ in range(3):
+        i = random.randint(0, POPULATION - 1)
         pop[i].state = "E"
         pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
 
     curve, rt, abs_curve = [], [], []
 
-    # ---------------- FIXED EPIDEMIC PARAMETERS ----------------
-    beta_work = 0.12          # per-contact transmission probability
-    beta_comm = 0.0008        # daily external infection risk
-
     for day in range(SIM_DAYS):
 
-        # seasonal forcing (community only)
         season = 0.5 + 0.5 * np.sin(2 * np.pi * day / 60)
-        lambda_comm = beta_comm * (0.5 + season)
+        comm_risk = p_comm * (0.5 + season)
 
         new_inf = 0
         infectious = 0
         absent = 0
 
+        # ---------------- TRANSMISSION ----------------
         for i, p in enumerate(pop):
 
             if p.state != "I":
@@ -136,34 +99,47 @@ def run_sim():
 
             infectious += 1
 
-            # WORKPLACE TRANSMISSION (correct network logic)
-            for j in G.neighbors(i):
+            # --- within workplace ---
+            wp = workplaces[p.workplace]
+
+            for j in wp:
+                if j == i:
+                    continue
+
                 q = pop[j]
 
                 if q.state != "S" or q.imm:
                     continue
 
-                p_trans = beta_work * q.susc()
-
-                if not p.symp:
-                    p_trans *= 0.6
-
-                if random.random() < p_trans:
+                if random.random() < p_work * q.susc():
                     q.state = "E"
                     q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
                     new_inf += 1
 
-            # COMMUNITY INFECTION (per-person hazard)
-            if random.random() < lambda_comm:
-                idx = random.randint(0, POPULATION - 1)
-                if pop[idx].state == "S":
-                    pop[idx].state = "E"
-                    pop[idx].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+            # --- between workplaces (light mixing) ---
+            if random.random() < p_between:
+                j = random.randint(0, POPULATION - 1)
+                q = pop[j]
+
+                if q.state == "S" and not q.imm:
+                    if random.random() < p_work * 0.5:
+                        q.state = "E"
+                        q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+                        new_inf += 1
+
+            # --- community infection ---
+            if random.random() < comm_risk:
+                j = random.randint(0, POPULATION - 1)
+                q = pop[j]
+
+                if q.state == "S":
+                    q.state = "E"
+                    q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
                     new_inf += 1
 
             p.inf_day += 1
 
-        # STATE TRANSITIONS
+        # ---------------- STATE UPDATES ----------------
         for p in pop:
             if p.state in ["E", "I"]:
                 p.days += 1
@@ -174,10 +150,7 @@ def run_sim():
                         p.days = 0
                         p.inf_day = 0
                         p.symp = random.random() < SYMPTOMATIC_RATE
-                        p.duration = max(1, int(np.random.normal(
-                            IS_MEAN if p.symp else IA_MEAN,
-                            IS_SD if p.symp else IA_SD
-                        )))
+                        p.duration = max(1, int(np.random.normal(I_MEAN, I_SD)))
                     else:
                         p.state = "R"
 
@@ -186,6 +159,8 @@ def run_sim():
         rt.append(new_inf / max(infectious, 1))
 
     return np.array(curve), np.array(rt), np.array(abs_curve)
+
+
 # ---------------- RUN ----------------
 curve, rt, abs_curve = run_sim()
 
@@ -197,7 +172,7 @@ fig, ax = plt.subplots()
 ax.plot(days, curve)
 st.pyplot(fig)
 
-st.subheader("Rt Over Time")
+st.subheader("Rt")
 fig2, ax2 = plt.subplots()
 ax2.plot(days, rt)
 ax2.axhline(1, linestyle="--")
@@ -206,46 +181,7 @@ st.pyplot(fig2)
 st.subheader("Absenteeism")
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
-ax3.axhline(ABS_10, color="orange", linestyle="--", label="10% threshold")
-ax3.axhline(ABS_25, color="red", linestyle="--", label="25% threshold")
-ax3.legend()
 st.pyplot(fig3)
 
-# ---------------- METRICS ----------------
-st.subheader("Workforce Impact")
-
-workdays = np.sum(abs_curve)
-
-st.metric("Total workdays lost", int(workdays))
+st.metric("Total workdays lost", int(np.sum(abs_curve)))
 st.metric("Peak absenteeism", int(np.max(abs_curve)))
-st.metric("Days >10% absent", int(np.sum(abs_curve >= ABS_10)))
-st.metric("Days >25% absent", int(np.sum(abs_curve >= ABS_25)))
-
-# ---------------- EXPORT ----------------
-df = pd.DataFrame({
-    "day": days,
-    "infections": curve,
-    "rt": rt,
-    "absenteeism": abs_curve
-})
-
-summary = pd.DataFrame([{
-    "population": POPULATION,
-    "R0_target": R0_TARGET,
-    "VE": VE,
-    "uptake": UPTAKE,
-    "contacts": CONTACTS,
-    "workdays_lost": workdays
-}])
-
-st.download_button(
-    "Download time series CSV",
-    df.to_csv(index=False),
-    "flu_timeseries.csv"
-)
-
-st.download_button(
-    "Download summary CSV",
-    summary.to_csv(index=False),
-    "flu_summary.csv"
-)
