@@ -53,6 +53,7 @@ def build_network(workplace_size):
     i = 0
     while i < POPULATION:
         size = max(2, int(np.random.poisson(workplace_size)))
+        size = min(size, POPULATION - i)
         group = nodes[i:i+size]
 
         for a in group:
