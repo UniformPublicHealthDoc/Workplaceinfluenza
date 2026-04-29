@@ -3,143 +3,135 @@ import numpy as np
 import random
 import networkx as nx
 import matplotlib.pyplot as plt
-import pandas as pd
-
-# ---------------- UI ----------------
-st.title("Metapopulation Workplace Influenza Model")
-
-POPULATION = st.slider("Total population", 200, 3000, 800, 100)
-WORKPLACES = st.slider("Number of workplaces", 5, 50, 15, 1)
-VE = st.slider("Vaccine effectiveness", 0.0, 0.9, 0.4, 0.05)
-UPTAKE = st.slider("Vaccine uptake", 0.0, 1.0, 0.6, 0.05)
-
-SIM_DAYS = 90
-
-BASELINE_IMMUNITY = 0.13
-SYMPTOMATIC_RATE = 0.5
 
 # ---------------- PARAMETERS ----------------
-p_work = 0.08       # within workplace transmission
-p_comm = 0.0012     # community infection risk
-p_between = 0.002   # cross-workplace mixing
+POPULATION = st.slider("Population size", 100, 2000, 400, 50)
+SIM_DAYS = 60
 
-E_MEAN, E_SD = 1.9, 1.2
-I_MEAN, I_SD = 4, 1.5
+BASELINE_IMMUNITY = 0.13
+
+SYMPTOMATIC_RATE = 0.5
+ASYMPTOMATIC_FACTOR = 0.5
+
+E_MEAN, E_SD = 1.9, 1.23
+IS_MEAN, IS_SD = 4, 1.5
+IA_MEAN, IA_SD = 4, 1.5
+
+BETA_WORKPLACE = 0.18
+BETA_COMMUNITY = 0.03
+
+ABS_THRESHOLD = int(0.10 * POPULATION)
+
+N_SIMS = 100  # number of simulations
 
 
-# ---------------- PERSON ----------------
+# ---------------- HELPERS ----------------
+def sample_days(mean, sd):
+    return max(1, int(np.random.normal(mean, sd)))
+
+
 class Person:
-    def __init__(self, workplace, vax, imm):
-        self.workplace = workplace
-        self.vax = vax
-        self.imm = imm
-
+    def __init__(self, vaccinated, immune):
+        self.vaccinated = vaccinated
+        self.immune = immune
         self.state = "S"
-        self.symp = False
-
+        self.symptomatic = False
         self.days = 0
         self.duration = 0
         self.inf_day = 0
 
-    def susc(self):
-        return (1 - VE) if self.vax else 1.0
+    def susceptibility(self, VE):
+        return (1 - VE) if self.vaccinated else 1.0
 
 
-# ---------------- POPULATION STRUCTURE ----------------
-def build_population():
+# ---------------- NETWORK ----------------
+def build_network(workplace_size):
+    G = nx.Graph()
+    G.add_nodes_from(range(POPULATION))
 
-    pop = []
+    nodes = list(G.nodes)
+    random.shuffle(nodes)
 
-    workplaces = [[] for _ in range(WORKPLACES)]
+    i = 0
+    while i < POPULATION:
+        size = max(2, int(np.random.poisson(workplace_size)))
+        size = min(size, POPULATION - i)
+        group = nodes[i:i+size]
 
+        for a in group:
+            for b in group:
+                if a != b:
+                    G.add_edge(a, b)
+
+        i += size
+
+    # light community mixing
     for i in range(POPULATION):
-        wp = i % WORKPLACES
+        for j in range(i+1, POPULATION):
+            if random.random() < 0.01:
+                G.add_edge(i, j)
 
-        vax = random.random() < UPTAKE
-        imm = random.random() < BASELINE_IMMUNITY
-
-        p = Person(wp, vax, imm)
-        pop.append(p)
-        workplaces[wp].append(i)
-
-    return pop, workplaces
+    return G
 
 
 # ---------------- SIMULATION ----------------
-def run_sim():
+def run_sim(VE, uptake, contacts):
 
-    pop, workplaces = build_population()
+    G = build_network(contacts)
 
-    # initial infections
-    for _ in range(3):
-        i = random.randint(0, POPULATION - 1)
-        pop[i].state = "E"
-        pop[i].duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+    pop = []
+    for _ in range(POPULATION):
+        vaccinated = random.random() < uptake
+        immune = random.random() < BASELINE_IMMUNITY
+        pop.append(Person(vaccinated, immune))
 
-    curve, rt, abs_curve = [], [], []
+    # seed infection
+    for i in random.sample(range(POPULATION), 2):
+        p = pop[i]
+        p.state = "E"
+        p.duration = sample_days(E_MEAN, E_SD)
 
-    for day in range(SIM_DAYS):
+    curve = []
+    rt_curve = []
+    abs_curve = []
 
-        season = 0.5 + 0.5 * np.sin(2 * np.pi * day / 60)
-        comm_risk = p_comm * (0.5 + season)
+    for _ in range(SIM_DAYS):
 
         new_inf = 0
         infectious = 0
         absent = 0
 
-        # ---------------- TRANSMISSION ----------------
         for i, p in enumerate(pop):
-
             if p.state != "I":
                 continue
 
-            if p.symp and p.inf_day >= 1:
+            # absenteeism rule
+            if p.symptomatic and p.inf_day >= 1:
                 absent += 1
                 continue
 
             infectious += 1
 
-            # --- within workplace ---
-            wp = workplaces[p.workplace]
+            for j in G.neighbors(i):
+                q = pop[j]
 
-            for j in wp:
-                if j == i:
+                if q.state != "S" or q.immune:
                     continue
 
-                q = pop[j]
+                beta = BETA_WORKPLACE * q.susceptibility(VE)
 
-                if q.state != "S" or q.imm:
-                    continue
+                if not p.symptomatic:
+                    beta *= ASYMPTOMATIC_FACTOR
 
-                if random.random() < p_work * q.susc():
+                if random.random() < beta:
                     q.state = "E"
-                    q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
-                    new_inf += 1
-
-            # --- between workplaces (light mixing) ---
-            if random.random() < p_between:
-                j = random.randint(0, POPULATION - 1)
-                q = pop[j]
-
-                if q.state == "S" and not q.imm:
-                    if random.random() < p_work * 0.5:
-                        q.state = "E"
-                        q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
-                        new_inf += 1
-
-            # --- community infection ---
-            if random.random() < comm_risk:
-                j = random.randint(0, POPULATION - 1)
-                q = pop[j]
-
-                if q.state == "S":
-                    q.state = "E"
-                    q.duration = max(1, int(np.random.normal(E_MEAN, E_SD)))
+                    q.days = 0
+                    q.duration = sample_days(E_MEAN, E_SD)
                     new_inf += 1
 
             p.inf_day += 1
 
-        # ---------------- STATE UPDATES ----------------
+        # state transitions
         for p in pop:
             if p.state in ["E", "I"]:
                 p.days += 1
@@ -149,39 +141,85 @@ def run_sim():
                         p.state = "I"
                         p.days = 0
                         p.inf_day = 0
-                        p.symp = random.random() < SYMPTOMATIC_RATE
-                        p.duration = max(1, int(np.random.normal(I_MEAN, I_SD)))
+                        p.symptomatic = random.random() < SYMPTOMATIC_RATE
+
+                        p.duration = sample_days(
+                            IS_MEAN if p.symptomatic else IA_MEAN,
+                            IS_SD if p.symptomatic else IA_SD
+                        )
+
                     else:
                         p.state = "R"
 
         curve.append(new_inf)
         abs_curve.append(absent)
-        rt.append(new_inf / max(infectious, 1))
+        rt_curve.append(new_inf / infectious if infectious > 0 else 0)
 
-    return np.array(curve), np.array(rt), np.array(abs_curve)
+    total_workdays_lost = np.sum(abs_curve)
+
+    return curve, rt_curve, abs_curve, total_workdays_lost
 
 
-# ---------------- RUN ----------------
-curve, rt, abs_curve = run_sim()
+# ---------------- STREAMLIT UI ----------------
+st.title("Influenza Workplace Outbreak Simulator (Averaged over 100 runs)")
+
+VE = st.slider("Vaccine Effectiveness", 0.0, 0.9, 0.4, 0.05)
+uptake = st.slider("Vaccine Uptake", 0.0, 1.0, 0.6, 0.05)
+contacts = st.slider("Workplace Contacts (avg group size)", 4, 20, 10, 1)
+
+# ---------------- RUN MULTIPLE SIMULATIONS ----------------
+all_curves = []
+all_rt = []
+all_abs = []
+all_workdays = []
+
+for _ in range(N_SIMS):
+    curve, rt, abs_curve, workdays_lost = run_sim(VE, uptake, contacts)
+    all_curves.append(curve)
+    all_rt.append(rt)
+    all_abs.append(abs_curve)
+    all_workdays.append(workdays_lost)
+
+# convert to arrays
+all_curves = np.array(all_curves)
+all_rt = np.array(all_rt)
+all_abs = np.array(all_abs)
+
+# mean results
+curve = np.mean(all_curves, axis=0)
+rt = np.mean(all_rt, axis=0)
+abs_curve = np.mean(all_abs, axis=0)
+workdays_lost = np.mean(all_workdays)
 
 days = np.arange(SIM_DAYS)
 
 # ---------------- PLOTS ----------------
-st.subheader("Epidemic Curve")
+st.subheader("Epidemic + Absenteeism (Mean of 100 simulations)")
+
 fig, ax = plt.subplots()
-ax.plot(days, curve)
+ax.plot(days, curve, label="Mean infections")
+ax.plot(days, abs_curve, label="Mean absenteeism")
+ax.legend()
 st.pyplot(fig)
 
-st.subheader("Rt")
+st.subheader("Rt over time (Mean)")
+
 fig2, ax2 = plt.subplots()
-ax2.plot(days, rt)
+ax2.plot(days, rt, color="purple")
 ax2.axhline(1, linestyle="--")
 st.pyplot(fig2)
 
-st.subheader("Absenteeism")
+st.subheader("Absenteeism threshold (10%)")
+
 fig3, ax3 = plt.subplots()
 ax3.plot(days, abs_curve)
+ax3.axhline(ABS_THRESHOLD, color="red", linestyle="--", label="10% threshold")
+ax3.legend()
 st.pyplot(fig3)
 
-st.metric("Total workdays lost", int(np.sum(abs_curve)))
+# ---------------- METRICS ----------------
+st.subheader("Workforce Impact (Mean across simulations)")
+
+st.metric("Total workdays lost", int(workdays_lost))
 st.metric("Peak absenteeism", int(np.max(abs_curve)))
+st.metric("Days above 10% threshold", int(np.sum(abs_curve >= ABS_THRESHOLD)))
